@@ -1,6 +1,9 @@
 
 // needed to avoid the link to debug "_d.lib" libraries
 #include "hijack_python_headers.hpp"
+
+// Define NPY_NO_DEPRECATED_API to avoid deprecated API warnings
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 
 #ifdef _OPENMP
@@ -66,11 +69,11 @@ aabbtree_normals_compute(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O!O!d", &PyArray_Type, &py_v, &PyArray_Type, &py_f, &eps))
         return NULL;
 
-    if (py_v->descr->type_num != NPY_DOUBLE || py_v->nd != 2) {
+    if (PyArray_TYPE(py_v) != NPY_DOUBLE || PyArray_NDIM(py_v) != 2) {
         PyErr_SetString(PyExc_ValueError, "Vertices must be of type double, and 2 dimensional");
         return NULL;
     }
-    if (py_f->descr->type_num != NPY_UINT32 || py_f->nd != 2) {
+    if (PyArray_TYPE(py_f) != NPY_UINT32 || PyArray_NDIM(py_f) != 2) {
         PyErr_SetString(PyExc_ValueError, "Faces must be of type uint32, and 2 dimensional");
         return NULL;
     }
@@ -109,11 +112,25 @@ aabbtree_normals_compute(PyObject *self, PyObject *args)
 static PyObject *
 aabbtree_normals_nearest(PyObject *self, PyObject *args)
 {
-    PyObject *py_tree, *py_v, *py_n;
-    if (!PyArg_ParseTuple(args, "OOO", &py_tree, &py_v, &py_n))
+    PyObject *py_tree, *py_v_obj, *py_n_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &py_tree, &py_v_obj, &py_n_obj))
         return NULL;
 
     TreeAndTri *search = (TreeAndTri *) PyCapsule_GetPointer(py_tree, NULL);
+
+    // Check if the objects are actually NumPy arrays
+    if (!PyArray_Check(py_v_obj)) {
+        PyErr_SetString(PyExc_ValueError, "First argument must be a NumPy array");
+        return NULL;
+    }
+    if (!PyArray_Check(py_n_obj)) {
+        PyErr_SetString(PyExc_ValueError, "Second argument must be a NumPy array");
+        return NULL;
+    }
+
+    // Cast to PyArrayObject*
+    PyArrayObject *py_v = (PyArrayObject*)py_v_obj;
+    PyArrayObject *py_n = (PyArrayObject*)py_n_obj;
 
     npy_intp* v_dims = PyArray_DIMS(py_v);
     npy_intp* n_dims = PyArray_DIMS(py_n);
@@ -129,8 +146,8 @@ aabbtree_normals_nearest(PyObject *self, PyObject *args)
 
     size_t S=v_dims[0];
 
-    array<double, 3>* m_sample_points=reinterpret_cast<array<double,3>*>(PyArray_DATA(py_v));
-    array<double, 3>* m_sample_n=reinterpret_cast<array<double,3>*>(PyArray_DATA(py_n));
+    array<double, 3>* m_sample_points=reinterpret_cast<array<double,3>*>(PyArray_DATA((PyArrayObject*)py_v));
+    array<double, 3>* m_sample_n=reinterpret_cast<array<double,3>*>(PyArray_DATA((PyArrayObject*)py_n));
 
     #ifdef _OPENMP
     omp_set_num_threads(8);
@@ -147,16 +164,16 @@ aabbtree_normals_nearest(PyObject *self, PyObject *args)
                                                       m_sample_n[ss][2])));
     }
 
-    npy_intp result1_dims[] = {1, S};
+    npy_intp result1_dims[] = {1, (npy_intp)S};
 
     PyObject *result1 = PyArray_SimpleNew(2, result1_dims, NPY_UINT32);
 
-    uint32_t* closest_triangles=reinterpret_cast<uint32_t*>(PyArray_DATA(result1));
+    uint32_t* closest_triangles=reinterpret_cast<uint32_t*>(PyArray_DATA((PyArrayObject*)result1));
     array<double,3>* closest_point=NULL;
     //if(1) { //nlhs > 1) {
-        npy_intp result2_dims[] = {S, 3};
+        npy_intp result2_dims[] = {(npy_intp)S, 3};
         PyObject *result2 = PyArray_SimpleNew(2, result2_dims, NPY_DOUBLE);
-        closest_point=reinterpret_cast<array<double,3>*>(PyArray_DATA(result2));
+        closest_point=reinterpret_cast<array<double,3>*>(PyArray_DATA((PyArrayObject*)result2));
     //}
 
     #pragma omp parallel for

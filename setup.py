@@ -90,6 +90,13 @@ class build_ext(_build_ext):
     def finalize_options(self):
 
         self.set_undefined_options('install', ('boost_location', 'boost_location'),)
+        
+        # Check for environment variable if boost_location is not provided
+        if self.boost_location is None or not self.boost_location.strip():
+            boost_env = os.environ.get('BOOST_INCLUDE_DIRS')
+            if boost_env:
+                self.boost_location = boost_env
+        
         if self.boost_location is not None and self.boost_location.strip():
             # avoid empty folder name as it may happen and mess with the compiler
             #

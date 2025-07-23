@@ -3,6 +3,9 @@
 // See file LICENSE.txt for full license details.
 
 #include <Python.h>
+
+// Define NPY_NO_DEPRECATED_API to avoid deprecated API warnings
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 #include <iostream>
 #include <boost/cstdint.hpp>
@@ -60,17 +63,17 @@ PyMODINIT_FUNC PyInit_visibility(void)
 
 template <typename CTYPE, int PYTYPE>
 npy_intp parse_pyarray(const PyArrayObject *py_arr, const array<CTYPE,3>* &cpp_arr){
-    if (py_arr->descr->type_num != PYTYPE || py_arr->nd != 2) {
+    if (PyArray_TYPE(py_arr) != PYTYPE || PyArray_NDIM(py_arr) != 2) {
         PyErr_SetString(PyExc_ValueError,
                 "Array must be of a specific type, and 2 dimensional");
-        return NULL;
+        return -1;
     }
     npy_intp* dims = PyArray_DIMS(py_arr);
     if (dims[1] != 3) {
         PyErr_SetString(PyExc_ValueError, "Array must be Nx3");
-        return NULL;
+        return -1;
     }
-    CTYPE *c_arr = (CTYPE*)PyArray_DATA(py_arr);
+    CTYPE *c_arr = (CTYPE*)PyArray_DATA((PyArrayObject*)py_arr);
     cpp_arr = reinterpret_cast<const array<CTYPE,3>*>(c_arr);
     return dims[0];
 }
@@ -113,18 +116,20 @@ visibility_compute(PyObject *self, PyObject *args, PyObject *keywds)
             const array<uint32_t,3>* faces_arr;
 
             npy_intp nv = parse_pyarray<double, NPY_DOUBLE>(py_v, verts_arr);
+            if (nv == -1) return NULL;
             npy_intp nf = parse_pyarray<uint32_t, NPY_UINT32>(py_f, faces_arr);
+            if (nf == -1) return NULL;
 
             search = new TreeAndTri;
             search->points.reserve(nv);
-            for(size_t pp=0; pp<nv; ++pp){
+            for(size_t pp=0; pp<(size_t)nv; ++pp){
                 search->points.push_back(K::Point_3(verts_arr[pp][0],
                                                     verts_arr[pp][1],
                                                     verts_arr[pp][2]));
             }
 
             search->triangles.reserve(nf);
-            for(size_t tt=0; tt<nf; ++tt) {
+            for(size_t tt=0; tt<(size_t)nf; ++tt) {
                 search->triangles.push_back(K::Triangle_3(search->points[faces_arr[tt][0]],
                                                           search->points[faces_arr[tt][1]],
                                                           search->points[faces_arr[tt][2]]));
@@ -134,18 +139,20 @@ visibility_compute(PyObject *self, PyObject *args, PyObject *keywds)
                 const array<double,3>* verts_extra_arr;
                 const array<uint32_t,3>* faces_extra_arr;
                 npy_intp nv_extra = parse_pyarray<double, NPY_DOUBLE>(py_extra_v, verts_extra_arr);
+                if (nv_extra == -1) return NULL;
                 npy_intp nf_extra = parse_pyarray<uint32_t, NPY_UINT32>(py_extra_f, faces_extra_arr);
+                if (nf_extra == -1) return NULL;
                 std::vector<K::Point_3> extrapoints;
 
                 extrapoints.reserve(nv_extra);
-                for(size_t pp=0; pp<nv_extra; ++pp){
+                for(size_t pp=0; pp<(size_t)nv_extra; ++pp){
                     extrapoints.push_back(K::Point_3(verts_extra_arr[pp][0],
                                                      verts_extra_arr[pp][1],
                                                      verts_extra_arr[pp][2]));
                 }
 
                 search->triangles.reserve(nf+nf_extra);
-                for(size_t tt=0; tt<nf_extra; ++tt) {
+                for(size_t tt=0; tt<(size_t)nf_extra; ++tt) {
                     search->triangles.push_back(K::Triangle_3(extrapoints[faces_extra_arr[tt][0]],
                                                               extrapoints[faces_extra_arr[tt][1]],
                                                               extrapoints[faces_extra_arr[tt][2]]));
@@ -156,7 +163,7 @@ visibility_compute(PyObject *self, PyObject *args, PyObject *keywds)
             search->tree.accelerate_distance_queries();
         }
 
-        if (py_cams->descr->type_num != NPY_DOUBLE || py_cams->nd != 2) {
+        if (PyArray_TYPE(py_cams) != NPY_DOUBLE || PyArray_NDIM(py_cams) != 2) {
             PyErr_SetString(PyExc_ValueError, "Camera positions must be of type double, and 2 dimensional");
             return NULL;
         }
@@ -171,11 +178,11 @@ visibility_compute(PyObject *self, PyObject *args, PyObject *keywds)
         double *pN = NULL;
         if (py_n != NULL){
             npy_intp* n_dims = PyArray_DIMS(py_n);
-            if (n_dims[1] != 3 || n_dims[0] != search->points.size()) {
+            if (n_dims[1] != 3 || n_dims[0] != (npy_intp)search->points.size()) {
                 PyErr_SetString(PyExc_ValueError, "Normals should have same number of rows as vertices, and 3 columns");
                 return NULL;
             }
-            pN = (double*)PyArray_DATA(py_n);
+            pN = (double*)PyArray_DATA((PyArrayObject*)py_n);
         }
 
         double *pSensors = NULL;
@@ -185,18 +192,18 @@ visibility_compute(PyObject *self, PyObject *args, PyObject *keywds)
                 PyErr_SetString(PyExc_ValueError, "Sensors should have same number of rows as cameras, 3x3 columns");
                 return NULL;
             }
-            pSensors = (double*)PyArray_DATA(py_sensors);
+            pSensors = (double*)PyArray_DATA((PyArrayObject*)py_sensors);
         }
 
-        double *pCams = (double*)PyArray_DATA(py_cams);
+        double *pCams = (double*)PyArray_DATA((PyArrayObject*)py_cams);
 
         size_t C = cam_dims[0];
 
-        npy_intp result_dims[] = {C,search->points.size()};
+        npy_intp result_dims[] = {(npy_intp)C,(npy_intp)search->points.size()};
         PyObject *py_bin_visibility = PyArray_SimpleNew(2, result_dims, NPY_UINT32);
         PyObject *py_normal_dot_cam = PyArray_SimpleNew(2, result_dims, NPY_DOUBLE);
-        uint32_t* visibility = reinterpret_cast<uint32_t*>(PyArray_DATA(py_bin_visibility));
-        double* normal_dot_cam = reinterpret_cast<double*>(PyArray_DATA(py_normal_dot_cam));
+        uint32_t* visibility = reinterpret_cast<uint32_t*>(PyArray_DATA((PyArrayObject*)py_bin_visibility));
+        double* normal_dot_cam = reinterpret_cast<double*>(PyArray_DATA((PyArrayObject*)py_normal_dot_cam));
 
         _internal_compute(search, pN, pCams, C, use_sensors,
                           pSensors, min_dist, visibility, normal_dot_cam);
